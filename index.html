@@ -1,5 +1,8 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>Iron Ledger</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Iron Ledger">
+<meta name="theme-color" content="#0D1115">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Big+Shoulders+Display:wght@700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -394,7 +397,7 @@ const exList=()=>Object.values(allEx());
 function incOf(d){if(!d)return S.settings.inc||5;if(d.type==='band')return 1;if(d.type==='bw'||d.type==='dur'){return d.inc!=null&&d.inc>0?d.inc:(d.type==='dur'?5:0);}return d.inc!=null&&d.inc>0?d.inc:(S.settings.inc||5);}
 
 /* ================= storage ================= */
-const LS={get(k){try{const v=localStorage.getItem('wl1:'+k);return v?JSON.parse(v):null;}catch(e){return null;}},set(k,v){try{localStorage.setItem('wl1:'+k,JSON.stringify(v));}catch(e){}},del(k){try{localStorage.removeItem('wl1:'+k);}catch(e){}}};
+const LS={get(k){try{const v=localStorage.getItem('wl1:'+k);return v?JSON.parse(v):null;}catch(e){console.warn('Iron Ledger storage read failed',k,e);return null;}},set(k,v){try{localStorage.setItem('wl1:'+k,JSON.stringify(v));return true;}catch(e){console.error('Iron Ledger storage save failed',k,e);toast('Storage full or unavailable — export a backup before closing Iron Ledger.','bad');return false;}},del(k){try{localStorage.removeItem('wl1:'+k);return true;}catch(e){console.error('Iron Ledger storage delete failed',k,e);toast('Could not update browser storage','bad');return false;}}};
 const cleanDoc=o=>JSON.parse(JSON.stringify(o,(k,v)=>v===null?undefined:v));
 const LSLOAD=k=>{const v=LS.get(k);return v&&typeof v==='object'?v:{};};
 const Store={db:null,uid:null,timers:{},pending:{},inflight:{},fails:{},docErr:{},
@@ -1018,7 +1021,7 @@ function meView(){
    +'</section>'
    +'<section class="blk"><h2>Barbell plates</h2>'+numf('settings.bar','Bar weight',s.bar,'')
    +'<label class="trow"><span><b>Plates you own</b><small>Per side, comma separated.</small></span><input class="txt" data-in="settings.plates" value="'+esc(s.plates)+'"></label></section>'
-   +'<section class="blk"><h2>Data</h2><p class="muted small" id="sync-line">'+syncLine()+'</p><p class="muted small">'+(S.mode==='cloud'?'Your log is saved with your Claude login, so it follows you across devices.':'Your log is saved in this browser only. Open the page from the Claude app to keep it across devices.')+'</p>'
+   +'<section class="blk"><h2>Data</h2><p class="muted small" id="sync-line">'+syncLine()+'</p><p class="muted small">'+(S.mode==='cloud'?'Your log is saved with your Claude login, so it follows you across devices.':'Your log is saved in Safari on this device, not on GitHub. Export a JSON backup regularly and keep it in Files or iCloud Drive.')+'</p>'
    +'<div class="col gap"><button class="btn sec" data-act="exportcsv">'+ic('download',18)+' Export workouts (CSV)</button><button class="btn sec" data-act="exporttxt">'+ic('download',18)+' Export history (text file)</button><button class="btn sec" data-act="exportjson">'+ic('download',18)+' Back up everything (JSON)</button><button class="btn sec" data-act="importpick">'+ic('upload',18)+' Import CSV or backup</button><input type="file" id="f-import" accept=".csv,.json,text/csv,application/json,text/plain" hidden></div>'
    +'<p class="muted small">CSV import reads Strong exports. Hevy files are read on a best-effort basis by matching column names. Weights are imported as written, with kg or lb columns converted to your unit.</p></section>'
    +'<section class="blk"><h2>Danger zone</h2><button class="btn danger-o" data-act="wipew">Delete all workout history</button></section>';
@@ -1643,7 +1646,21 @@ async function saveFile(filename,text){
     const d=window.claude&&window.claude.use?await window.claude.use('downloads'):null;
     if(d){await d.save({filename:filename,data:text});toast('Saved '+filename);return;}
   }catch(e){if(e&&e.code==='declined')return;}
-  S.sheet={t:'text',title:filename,text:text};render();
+  // Standalone Safari / GitHub Pages: use a native file download instead of a text sheet.
+  // The download is initiated by the user; no workout data is uploaded to GitHub.
+  try{
+    const mime=/\.json$/i.test(filename)?'application/json':/\.csv$/i.test(filename)?'text/csv':'text/plain';
+    const blob=new Blob([text],{type:mime+';charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=filename;a.style.display='none';
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    toast('Backup file ready: '+filename);
+  }catch(e){
+    console.warn('File download failed',e);
+    S.sheet={t:'text',title:filename,text:text};render();
+  }
 }
 function exportCSV(){
   const H=['Date','Workout Name','Duration','Exercise Name','Set Order','Weight','Reps','Distance','Seconds','Notes','Workout Notes','RPE','Set Type'];
@@ -1766,6 +1783,11 @@ async function handleImport(file){
   try{
     if(/\.json$/i.test(file.name)||/^\s*\{/.test(text)){
       const o=JSON.parse(text);let added=0;
+      if(!o||o.v!==1||!Array.isArray(o.routines)||!Array.isArray(o.workouts)||
+         !o.workouts.every(w=>w&&typeof w.id==='string'&&Array.isArray(w.exs))||
+         !o.routines.every(r=>r&&typeof r.id==='string'&&Array.isArray(r.exs))){
+        toast('Invalid Iron Ledger backup. Nothing was imported.','bad');return;
+      }
       if(o.settings)Object.assign(S.settings,o.settings);
       const idmap={};
       (o.routines||[]).forEach(r=>{
